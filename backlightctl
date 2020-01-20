@@ -1,11 +1,10 @@
 #!/usr/bin/env python
-import argparse, os, sys
-
-# CONFIGURATION
-driver_path="/sys/class/backlight/intel_backlight"
+import argparse, os, sys, glob, subprocess
 
 # SETUP ARGUMENT-PARSER AND HELPPAGE
 parser = argparse.ArgumentParser(description="Change displays backlight intensity.")
+parser.add_argument('--setup', dest="setup", action="store_true", default=False, help="Setup backlightctl for the current user")
+parser.add_argument('--driver', dest="driver", metavar="INT", default=-1, type=int, help="Temporary driver numnber to use")
 parser.add_argument('-i', '--inc', dest="increment", action="store_true", default=False, help="Increment brightness by 1")
 parser.add_argument('-d', '--dec', dest="decrement", action="store_true", default=False, help="Decrement brightness by 1")
 parser.add_argument('-a', '--add', dest="add", metavar="INT", default=0, type=int, help="Add INT to brightness")
@@ -13,54 +12,105 @@ parser.add_argument('-m', '--sub', dest="substract", metavar="INT", default=0, t
 parser.add_argument('-s', '--set', dest="set", default=-1, metavar="INT", type=int, help="Set brightness to INT")
 args = parser.parse_args()
 
-# CHECK IF CURRENT DRIVER EXISTS
-if not os.path.exists(driver_path):
-    print("There is no backlight driver in '{0}'.".format(driver_path))
-    exit(1)
+# GET ENVIRONMENT
+drivers_path = '/sys/class/backlight'
+config_home = os.path.expanduser(os.environ.get(os.environ.get("XDG_CONFIG_HOME")) if "XDG_CONFIG_HOME" in os.environ.keys() else "~/.config")
+available_drivers = sorted(glob.glob("{0}/*".format(drivers_path)))
+selection = -1
 
-# READ THE CURRENT AND THE MAX INTENSITY OF THE BACKLIGHT
-with open("{0}/{1}".format(driver_path, "max_brightness"), "r") as max_reader:
-    max_intensity = int(max_reader.read())
+if os.getuid() != 0:
+    if not os.path.exists(config_home):
+        os.mkdir(config_home)
 
-with open("{0}/{1}".format(driver_path, "brightness"), "r") as current_reader:
-    current_intensity = int(current_reader.read())
+    # SETUP BACKLIGHTCTL
+    if not args.setup and not os.path.exists("{0}/backlightctl".format(config_home)):
+        print("backlightctl is not configured. Please run 'backlightctl --setup'.")
+        exit(-1)
 
-# CALCULATE NEW INTENSITY FOR THE BACKLIGHT
-change = 0
-if args.set > -1:
-    new_intensity = min(args.set, max_intensity)
-elif args.increment is False and args.decrement is False and args.add == 0 and args.substract == 0:
-    new_intensity = min(int(sys.stdin.readline()), max_intensity)
-else:
-    change = args.add - args.substract
-    change += 1 if args.increment else 0
-    change -= 1 if args.decrement else 0
-    if current_intensity + change < 0:
-        new_intensity = 0
-    elif current_intensity + change > max_intensity:
-        new_intensity = max_intensity
+    elif args.setup:
+         with open("{0}/{1}".format(config_home, "backlightctl"), "w") as config:
+            if len(available_drivers) == 1:
+                selection = 0
+            else:
+                print("On your device are {0} backlight drivers available. Please enter the number of the driver to use.".format(len(available_drivers)))
+                for index, driver in enumerate(available_drivers):
+                    print("{0}: {1}".format(index, driver))
+
+                while selection not in range(len(available_drivers)):
+                    selection = int(input())
+
+            exit(config.write("{0}".format(selection)))
+
     else:
-        new_intensity = current_intensity + change
+        if args.driver == -1:
 
-# SET NEW BACKLIGHT INTENSITY
-try:
-    with open("{0}/{1}".format(driver_path, "brightness"), "w") as backlight_intensity_writer:
-        backlight_intensity_writer.write(str(new_intensity))
-except:
-    print("An error occurred, application was unable change the backlight intensity. Do you have write access to '{0}'?".format(
-        driver_path    
-    ))
-    exit(1)
+            with open("{0}/{1}".format(config_home, "backlightctl"), "r") as config:
+                drivers = ["--driver", "{0}".format(int(config.read()))]
 
-# CREATE OUTPUT STATUS
-if args.set > -1 or change != 0:
-    print("Your backlight intensity is now {0}. It was {1}. The maximum intensity for your device is {2}".format(
-        new_intensity,
-        current_intensity,
-        max_intensity
-    ))
+            if len(available_drivers) == 1:
+                drivers = ['--driver', '0']
+        else:
+            drivers = []
+        subprocess.call(['sudo'] + sys.argv + drivers)
+
 else:
-    print("Your backlight intensity is {0} for a maximum for your device of {1}".format(
-        new_intensity,
-        max_intensity
-    ))
+
+    if args.setup:
+        print("Please do not run this setup as root.")
+        exit(-1)
+    elif args.driver not in range(len(available_drivers)):
+        print("Plese run the --setup or specify a --driver")
+
+    driver_path = available_drivers[int(args.driver)]
+
+    # CHECK IF CURRENT DRIVER EXISTS
+    if not os.path.exists(driver_path):
+        print("There is no backlight driver in '{0}'.".format(driver_path))
+        exit(1)
+
+    # READ THE CURRENT AND THE MAX INTENSITY OF THE BACKLIGHT
+    with open("{0}/{1}".format(driver_path, "max_brightness"), "r") as max_reader:
+        max_intensity = int(max_reader.read())
+
+    with open("{0}/{1}".format(driver_path, "brightness"), "r") as current_reader:
+        current_intensity = int(current_reader.read())
+
+    # CALCULATE NEW INTENSITY FOR THE BACKLIGHT
+    change = 0
+    if args.set > -1:
+        new_intensity = min(args.set, max_intensity)
+    elif args.increment is False and args.decrement is False and args.add == 0 and args.substract == 0:
+        new_intensity = min(int(sys.stdin.readline()), max_intensity)
+    else:
+        change = args.add - args.substract
+        change += 1 if args.increment else 0
+        change -= 1 if args.decrement else 0
+        if current_intensity + change < 0:
+            new_intensity = 0
+        elif current_intensity + change > max_intensity:
+            new_intensity = max_intensity
+        else:
+            new_intensity = current_intensity + change
+
+    # SET NEW BACKLIGHT INTENSITY
+    try:
+        with open("{0}/{1}".format(driver_path, "brightness"), "w") as backlight_intensity_writer:
+            backlight_intensity_writer.write(str(new_intensity))
+    except:
+        print("An error occurred, application was unable change the backlight intensity. Do you have write access to '{0}'?".format(
+            driver_path
+        ))
+        exit(1)
+
+    # CREATE OUTPUT STATUS
+    if args.set > -1 or change != 0:
+        print("Your backlight intensity is now {0}. It was {1}. The maximum intensity for your device is {2}".format(
+            new_intensity,
+            current_intensity,
+            max_intensity
+        ))
+    else:
+        print("Your backlight intensity is {0} for a maximum for your device of {1}".format(
+            new_intensity,
+            max_intensity
+        ))

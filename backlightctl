@@ -58,10 +58,11 @@ else:
     if args.setup:
         print("Please do not run this setup as root.")
         exit(-1)
-    elif args.driver not in range(len(available_drivers)):
+    elif args.driver not in range(len(available_drivers)) and len(available_drivers) != 1:
         print("Plese run the --setup or specify a --driver")
+        exit(-1)
 
-    driver_path = available_drivers[int(args.driver)]
+    driver_path = available_drivers[0 if len(available_drivers) == 1 else int(args.driver)]
 
     # CHECK IF CURRENT DRIVER EXISTS
     if not os.path.exists(driver_path):
